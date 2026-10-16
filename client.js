@@ -189,6 +189,19 @@ window.__ModuleLoader__.load({
       return s.length > 8 ? s.slice(0, 8) : s
     }
 
+    /**
+     * 从注入上下文里读一个服务。
+     *
+     * 与服务声明（`inject: [...]`）的区别是刻意的：声明了但缺失的服务会把整条
+     * fiber 停住 —— 于是"某个服务稍后才激活"的部署会**彻底丢掉**本插件；动态
+     * 读取则允许它在服务到位后自然接上。dsh-bgm 用的是同一套判断。
+     */
+    function serviceAt(owner, name) {
+      if (owner === undefined || owner === null || typeof owner.get !== 'function') return undefined
+      const value = owner.get(name)
+      return value === null || value === undefined ? undefined : value
+    }
+
     // ---------------------------------------------------------------- store
 
     /**
@@ -680,11 +693,12 @@ window.__ModuleLoader__.load({
     }
 
     /** 主面板（浮层）。 */
-    function Panel() {
+    function Panel(props) {
       const store = getStore()
       useStoreVersion(store)
       ensureStyle()
-      const ctx = globalThis.__dshDeleteCtx__
+      // 优先用挂载时注入进来的 owner（更新鲜），退回 apply 登记的全局引用。
+      const ctx = props?.owner ?? globalThis.__dshDeleteCtx__
       const snapshot = useSessionSnapshot(ctx)
       const st = store.state
 
@@ -962,39 +976,53 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------- apply
 
     function apply(ctx) {
+      if (ctx === undefined || ctx === null || typeof ctx.inject !== 'function') return
+
       // 面板需要 ctx 去读会话列表服务；组件是闭包，取这里登记的引用。
       globalThis.__dshDeleteCtx__ = ctx
       // 先把共享 store 落到 globalThis 上，组件首次渲染时就能取到同一份。
       getStore()
 
-      const register = (name, id, order, component) => {
-        try {
-          return ctx.slots.inject(name, () =>
-            ctx.slots.register({ name, id, order }, component),
-          )
-        } catch (error) {
-          console.warn('dsh-delete: 插槽登记失败', name, error)
-          return undefined
+      // 关键：**不能**写 `ctx.slots.inject(...)`。
+      // 在 DSH 0.2.0-rc.x 里插槽是 `slots` 服务，必须通过 `ctx.inject(['slots'], cb)`
+      // 拿到注入上下文后再读；直接访问 `ctx.slots` 会抛错，于是**一个入口都注册不上**
+      // （宿主路由照常工作，界面上却什么都没有）。
+      ctx.inject(['slots'], (owner) => {
+        const slots = serviceAt(owner, 'slots')
+        if (slots === undefined || typeof slots.inject !== 'function') {
+          console.warn('dsh-delete: 宿主未提供 slots 服务，入口与面板都无法注册')
+          return
         }
-      }
 
-      const disposers = [
-        register(ENTRY_SLOT, ENTRY_ID, 900, EntryButton),
-        register(OVERLAY_SLOT, OVERLAY_ID, 900, Panel),
-      ]
+        /** 一次挂载两个条目，返回一个合并的注销函数（交给 owner.effect 持有）。 */
+        const mount = () => {
+          const disposers = []
+          const register = (slot, id, order, render) => {
+            disposers.push(slots.inject(slot, () => slots.register({ name: slot, id, order }, render)))
+          }
+          register(ENTRY_SLOT, ENTRY_ID, 900, () => h(EntryButton, null))
+          register(OVERLAY_SLOT, OVERLAY_ID, 900, () => h(Panel, { owner }))
+          return () => {
+            for (const dispose of disposers) {
+              try {
+                if (typeof dispose === 'function') dispose()
+              } catch {
+                /* 注销失败不该影响其它条目 */
+              }
+            }
+          }
+        }
+
+        try {
+          if (typeof owner.effect === 'function') owner.effect(mount, 'dsh-delete: slots')
+          else mount()
+        } catch (error) {
+          console.warn('dsh-delete: 插槽登记失败', error)
+        }
+      })
 
       // 提前预热一次盘点：用户点开入口时面板已经有内容。
       void reload()
-
-      return () => {
-        for (const dispose of disposers) {
-          try {
-            if (typeof dispose === 'function') dispose()
-          } catch {
-            /* ignore */
-          }
-        }
-      }
     }
 
     return {

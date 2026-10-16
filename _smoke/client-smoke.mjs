@@ -39,11 +39,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '..', 'client.js'), 'utf8')
 
 let loaded = null
+const warnings = []
 const sandbox = {
   navigator: { language: 'zh-CN' },
   document: { getElementById: () => null, createElement: () => ({ id: '', textContent: '' }), head: { appendChild() {} } },
   location: { reload() {} },
-  console,
+  console: { log: console.log, error: console.error, warn: (...a) => warnings.push(a.map(String).join(' ')) },
   fetch: async () => ({ json: async () => ({}) }),
 }
 sandbox.window = {
@@ -176,6 +177,87 @@ eq(t('selectedCount', { n: 3 }), '已选 3 个会话', '词条占位替换')
 eq(t('confirmTitle', { n: 2 }), '确认删除 2 个会话？', '词条占位替换（含问号）')
 eq(t('nonexistent-key'), 'nonexistent-key', '缺词回退到 key 本身')
 eq(t('remove'), '删除选中', '无参数词条')
+
+// --------------------------------------- apply / 插槽登记（历史 bug 的回归测试）
+
+/**
+ * 回归背景：第一版把插槽写成 `ctx.slots.inject(...)`，而 DSH 0.2.0-rc.x 的插槽是
+ * 一个必须通过 `ctx.inject(['slots'], cb)` 才能拿到的服务 —— 直接访问 `ctx.slots`
+ * 抛错被 catch 吞掉，于是**宿主路由正常、界面上一个入口都没有**（现象：左侧栏
+ * 找不到任何删除功能）。下面这几条断言把那个写法钉死。
+ */
+
+function makeCtx({ withSlots = true } = {}) {
+  const registered = []
+  const effects = []
+  const slots = {
+    inject(slot, fn) {
+      registered.push(slot)
+      return fn()
+    },
+    register(opts) {
+      registered.push(opts)
+      return () => {}
+    },
+  }
+  const owner = {
+    get: (name) => (name === 'slots' && withSlots ? slots : undefined),
+    effect: (fn, label) => {
+      effects.push(label)
+      return fn()
+    },
+  }
+  return {
+    inject: (services, cb) => cb(owner),
+    get: () => undefined,
+    _registered: registered,
+    _effects: effects,
+  }
+}
+
+delete sandbox.__dshDeleteStore__
+const ctx = makeCtx()
+mod.apply(ctx)
+ok(
+  ctx._registered.includes('sidebar.footer.action'),
+  'apply 必须登记 sidebar.footer.action（历史 bug：写成 ctx.slots 导致一个入口都挂不上）',
+)
+ok(ctx._registered.includes('shell.overlay'), 'apply 必须登记 shell.overlay')
+const entryOpt = ctx._registered.find((r) => r !== null && typeof r === 'object' && r.id === 'dsh-delete-entry')
+const panelOpt = ctx._registered.find((r) => r !== null && typeof r === 'object' && r.id === 'dsh-delete-panel')
+eq(entryOpt?.name, 'sidebar.footer.action', '入口条目的 name')
+eq(panelOpt?.name, 'shell.overlay', '面板条目的 name')
+ok(
+  ctx._effects.some((label) => String(label).includes('dsh-delete')),
+  '登记要挂在 owner.effect 上，fiber 销毁时才能注销',
+)
+
+// 降级路径：宿主没有 slots 服务时不能抛，只警告
+delete sandbox.__dshDeleteStore__
+const ctxNoSlots = makeCtx({ withSlots: false })
+let threw = false
+try {
+  mod.apply(ctxNoSlots)
+} catch {
+  threw = true
+}
+ok(!threw, '宿主没有 slots 服务时 apply 不应抛错')
+eq(ctxNoSlots._registered.length, 0, '没有 slots 时不应登记任何条目')
+ok(
+  warnings.some((w) => w.includes('slots')),
+  '没有 slots 时应当留下一条警告（而不是静默失败）',
+)
+
+// 垃圾入参的防御
+threw = false
+try {
+  mod.apply(undefined)
+  mod.apply(null)
+  mod.apply({})
+} catch {
+  threw = true
+}
+ok(!threw, 'apply(undefined / null / {}) 都不应抛错')
 
 // ------------------------------------------------------------------- 收尾
 
