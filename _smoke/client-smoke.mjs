@@ -70,7 +70,8 @@ ok(Array.isArray(mod?.inject), 'factory 应返回 inject 数组')
 eq(mod?.inject?.length, 0, 'inject 应为空（依赖全部运行时探测）')
 eq(typeof mod?.apply, 'function', 'factory 应返回 apply')
 
-const { buildRows, buildTree, descendantsOf, siblingsOf, rootOf, fmtBytes, t } = mod._internals
+const { buildRows, buildTree, descendantsOf, siblingsOf, rootOf, cascadeSelection, subagentIds, fmtBytes, t } =
+  mod._internals
 
 // ------------------------------------------------------------- 测试数据
 
@@ -154,6 +155,43 @@ eq(rootOf(tree, B), A, 'B 的家族根是 A')
 eq(rootOf(tree, G), A, 'G 的家族根是 A')
 eq(rootOf(tree, A), A, 'A 自己是根')
 eq(rootOf(tree, C), C, 'C 自己是根')
+
+// ------------------------------- 级联选择（回归：空选择时曾经变成"全选"）
+
+/**
+ * 回归背景：第一版 batchPick 在「没有勾选任何会话」时把基准取成了**全部会话**，
+ * 于是点一下「选中子 agent」等于全选（用户实测截图：153 个全被勾上）。
+ * 正确语义是「扩展当前选择」：没有选择就没有基准，必须返回空集。
+ */
+eq(cascadeSelection(tree, [], 'subagents'), [], '空选择时「含子 agent」必须返回空集（不能变成全选）')
+eq(cascadeSelection(tree, [], 'siblings'), [], '空选择时「含团队成员」必须返回空集')
+eq(cascadeSelection(tree, [], 'family'), [], '空选择时「含整族」必须返回空集')
+eq(cascadeSelection(tree, null, 'subagents'), [], 'base 为 null 时也不许全选')
+eq(cascadeSelection(tree, ['不存在的id'], 'family'), [], '基准全是不存在的 id 时返回空集')
+
+// 「含子 agent」= 已勾选会话 + 其全部后代
+eq(cascadeSelection(tree, [A], 'subagents').sort(), [A, B, G].sort(), '含子 agent：A 自己 + 后代')
+eq(cascadeSelection(tree, [C], 'subagents'), [C], '含子 agent：C 没有后代，只留它自己')
+eq(cascadeSelection(tree, [B, G], 'subagents').sort(), [B, G].sort(), '含子 agent：已经是叶子时保持原样')
+
+// 「含团队成员」= 已勾选会话 + 同父兄弟
+eq(cascadeSelection(tree, [B], 'siblings').sort(), [B, G].sort(), '含团队成员：B 的兄弟 G')
+eq(cascadeSelection(tree, [A], 'siblings'), [A], '根的兄弟为空，保持原样')
+
+// 「含整族」= 上溯到根 + 根的整棵子树
+eq(cascadeSelection(tree, [B], 'family').sort(), [A, B, G].sort(), '含整族：从 B 上溯到 A 并带走整棵子树')
+eq(cascadeSelection(tree, [C], 'family'), [C], '含整族：C 是独苗')
+eq(cascadeSelection(tree, [B, C], 'family').sort(), [A, B, C, G].sort(), '含整族：多个基准各取自己的家族')
+
+// 结果里不许出现 tree 之外的 id
+ok(
+  cascadeSelection(tree, [A], 'family').every((id) => tree.byId.has(id)),
+  '级联结果必须都在 tree 内',
+)
+
+// 「全选子 agent」只挑子 agent 行
+eq(subagentIds(rows).sort(), [B, G].sort(), '全选子 agent：只挑有父的 / 标了 isSubagent 的行')
+eq(subagentIds([]).length, 0, '全选子 agent：空列表返回空')
 
 // 环保护：人为造一个 A → B → A 的环，rootOf 不能死循环
 const loopRows = [

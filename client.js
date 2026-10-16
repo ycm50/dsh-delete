@@ -58,9 +58,15 @@ window.__ModuleLoader__.load({
       clear: '清空',
       expandAll: '展开全部',
       collapseAll: '折叠全部',
-      pickSubagents: '选中子 agent',
-      pickSiblings: '选中团队成员',
-      pickFamily: '选中整族',
+      pickSubagents: '含子 agent',
+      pickSiblings: '含团队成员',
+      pickFamily: '含整族',
+      selectAllSubagents: '全选子 agent',
+      pickHint: '先勾选至少一个会话',
+      selectAllSubagentsHint: '把所有标记为「子agent」的行一次选上',
+      pickSubagentsHint: '把已勾选会话的全部后代一并选上',
+      pickSiblingsHint: '把已勾选会话的同父兄弟（团队成员）一并选上',
+      pickFamilyHint: '上溯到家族根，把它整棵子树一并选上',
       loading: '正在读取会话…',
       empty: '没有匹配的会话',
       selectedCount: '已选 {n} 个会话',
@@ -100,9 +106,15 @@ window.__ModuleLoader__.load({
       clear: 'Clear',
       expandAll: 'Expand all',
       collapseAll: 'Collapse all',
-      pickSubagents: 'Select subagents',
-      pickSiblings: 'Select teammates',
-      pickFamily: 'Select whole family',
+      pickSubagents: 'Include subagents',
+      pickSiblings: 'Include teammates',
+      pickFamily: 'Include whole family',
+      selectAllSubagents: 'All subagents',
+      pickHint: 'Tick at least one session first',
+      selectAllSubagentsHint: 'Select every row marked as a subagent, in one click',
+      pickSubagentsHint: 'Also select every descendant of the ticked sessions',
+      pickSiblingsHint: 'Also select the siblings (teammates) of the ticked sessions',
+      pickFamilyHint: 'Walk up to the family root and select its whole subtree',
       loading: 'Reading sessions…',
       empty: 'No matching session',
       selectedCount: '{n} selected',
@@ -734,6 +746,8 @@ window.__ModuleLoader__.load({
       const selectedIds = [...st.selected].filter((id) => tree.byId.has(id))
       const selectedBytes = selectedIds.reduce((n, id) => n + (tree.byId.get(id)?.bytes ?? 0), 0)
       const selectedPaths = selectedIds.reduce((n, id) => n + (tree.byId.get(id)?.paths ?? 0), 0)
+      /** 三个「含…」级联键要求先有选择：它们做的是**扩展**，没有基准就没有意义。 */
+      const noSelection = selectedIds.length === 0
 
       const workspaces = [...new Set(rows.map((r) => r.workspaceSlug).filter((s) => s !== ''))].sort()
 
@@ -795,9 +809,50 @@ window.__ModuleLoader__.load({
               : null,
             h('button', { type: 'button', className: 'dshdel-btn', onClick: () => store.setSelected(rows.map((r) => r.id)) }, t('selectAll')),
             h('button', { type: 'button', className: 'dshdel-btn', onClick: () => store.setSelected([]) }, t('clear')),
-            h('button', { type: 'button', className: 'dshdel-btn', onClick: () => batchPick(store, tree, rows, 'subagents') }, t('pickSubagents')),
-            h('button', { type: 'button', className: 'dshdel-btn', onClick: () => batchPick(store, tree, rows, 'siblings') }, t('pickSiblings')),
-            h('button', { type: 'button', className: 'dshdel-btn', onClick: () => batchPick(store, tree, rows, 'family') }, t('pickFamily')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshdel-btn',
+                title: t('selectAllSubagentsHint'),
+                onClick: () => store.setSelected(subagentIds(rows).filter((id) => tree.byId.has(id))),
+              },
+              t('selectAllSubagents'),
+            ),
+            // 三个级联键是「**扩展**当前选择」，所以必须先有选择；没有就置灰并说明原因。
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshdel-btn',
+                disabled: noSelection,
+                title: noSelection ? t('pickHint') : t('pickSubagentsHint'),
+                onClick: () => batchPick(store, tree, 'subagents'),
+              },
+              t('pickSubagents'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshdel-btn',
+                disabled: noSelection,
+                title: noSelection ? t('pickHint') : t('pickSiblingsHint'),
+                onClick: () => batchPick(store, tree, 'siblings'),
+              },
+              t('pickSiblings'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshdel-btn',
+                disabled: noSelection,
+                title: noSelection ? t('pickHint') : t('pickFamilyHint'),
+                onClick: () => batchPick(store, tree, 'family'),
+              },
+              t('pickFamily'),
+            ),
             h('button', { type: 'button', className: 'dshdel-btn', onClick: () => store.patch({ collapsed: new Set() }) }, t('expandAll')),
             h(
               'button',
@@ -908,11 +963,23 @@ window.__ModuleLoader__.load({
       return false
     }
 
-    /** 批量选择：基于当前选择展开（子 agent / 团队成员 / 整族）。 */
-    function batchPick(store, tree, rows, mode) {
-      const base = store.state.selected.size > 0 ? [...store.state.selected] : rows.map((r) => r.id)
-      const add = new Set(base)
-      for (const id of base) {
+    /**
+     * 纯函数：把「当前勾选的会话」**扩展**成一个新集合。
+     *
+     * ⚠️ 这里曾经写错过：空选择时把基准取成了**全部会话**，于是「选中子 agent」从
+     * 全部会话出发再加后代，结果等同于全选（用户实测：按一下全被勾上）。
+     * 正确语义是「扩展当前选择」——没有选择就没有可扩展的基准，返回空集，
+     * UI 侧把按钮置灰并说明原因。
+     *
+     * @param tree    由 buildTree 得到的索引
+     * @param baseIds 当前勾选的会话 id
+     * @param mode    subagents（全部后代）| siblings（同父兄弟）| family（上溯到根后整棵子树）
+     */
+    function cascadeSelection(tree, baseIds, mode) {
+      const add = new Set((baseIds ?? []).filter((id) => tree.byId.has(id)))
+      if (add.size === 0) return []
+      // 先快照再遍历：descendantsOf 已经给出整棵子树，不需要在循环里递归展开新加入的节点。
+      for (const id of [...add]) {
         if (mode === 'subagents') {
           for (const d of descendantsOf(tree, id)) add.add(d)
         } else if (mode === 'siblings') {
@@ -923,7 +990,18 @@ window.__ModuleLoader__.load({
           for (const d of descendantsOf(tree, root)) add.add(d)
         }
       }
-      store.setSelected([...add].filter((id) => tree.byId.has(id)))
+      return [...add].filter((id) => tree.byId.has(id))
+    }
+
+    /** 纯函数：所有「子 agent」行（有父 id，或磁盘元数据标了 isSubagent）。 */
+    function subagentIds(rows) {
+      return rows.filter((r) => r.isSubagent === true || r.parentId !== '').map((r) => r.id)
+    }
+
+    /** 批量选择：把当前勾选扩展为「含子 agent / 含团队成员 / 含整族」。 */
+    function batchPick(store, tree, mode) {
+      const next = cascadeSelection(tree, [...store.state.selected], mode)
+      if (next.length > 0) store.setSelected(next)
     }
 
     /** 重新拉盘点。 */
@@ -1031,7 +1109,7 @@ window.__ModuleLoader__.load({
       inject: [],
       apply,
       /** 供离线测试使用；不属于插件契约。 */
-      _internals: { buildRows, buildTree, descendantsOf, siblingsOf, rootOf, fmtBytes, t },
+      _internals: { buildRows, buildTree, descendantsOf, siblingsOf, rootOf, cascadeSelection, subagentIds, fmtBytes, t },
     }
   },
 })
