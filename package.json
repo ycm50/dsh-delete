@@ -1,0 +1,48 @@
+{
+  "name": "dsh-delete",
+  "version": "0.1.0",
+  "description": "DSH 会话删除插件：在左侧栏入口打开多选管理面板，删除会话（含子 agent 与团队成员）及其磁盘文件。",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node _smoke/logic-smoke.mjs && node _smoke/client-smoke.mjs",
+    "test:host": "node _smoke/logic-smoke.mjs",
+    "test:client": "node _smoke/client-smoke.mjs"
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "session",
+    "delete"
+  ]
+}

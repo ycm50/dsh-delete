@@ -1,0 +1,9 @@
+# dsh-delete bundle 层：把本包作为一行宿主插件挂进 profile。
+#
+# `id` 同时是设置命名空间：@deepseek-ai/dsh-settings 会描述本模块导出的 `Config`，
+# 于是「设置 → 插件配置」里出现本插件的一行（enabled / 二次确认 / 保留投影缓存）。
+#
+# 这里不携带 config：三个字段都是 volatile，可在设置页直接改并即时生效。
+- insert:
+    - id: dsh-delete
+      name: dsh-delete
