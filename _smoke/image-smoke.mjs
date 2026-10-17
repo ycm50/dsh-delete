@@ -27,7 +27,10 @@ import {
   buildSessionModelFromSession,
   classifyAttachmentObject,
   classifySourceFile,
+  costBySeq,
+  usageAnchors,
   countVariantFiles,
+  estimateBreakCost,
   eventAtSeq,
   executeDiskDeletion,
   foldPath,
@@ -335,6 +338,77 @@ const LOG_A = join(HOME, 'sessions', '--ws--', SESSION_A, 'session.v4.jsonl.zstd
   // 没有内存日志时返回 null（调用方退回读盘）
   eq(buildSessionModelFromSession({}), null, '没有 log 字段 → null')
   eq(buildSessionModelFromSession(null), null, 'null 会话 → null')
+}
+
+// --------------------------------------------------------------- 3.8 缓存代价预估
+
+{
+  /** 造一条带用量的 assistant 消息（真实日志里 usage 挂在它的 data.usage 上）。 */
+  const withUsage = (seq, input, hit) => ({
+    type: 'assistant/message',
+    seq,
+    time: 1,
+    data: {
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      usage: { inputTokens: input, cacheReadTokens: hit },
+    },
+    surfaceOp: 'append',
+  })
+  const events = [
+    { type: 'session', version: 4, seq: 0, id: 'x' },
+    withUsage(1, 300, 700), // 总量 1000
+    withUsage(10, 100, 2900), // 总量 3000
+    withUsage(20, 50, 4940), // 总量 4990
+    { type: 'assistant/message', seq: 30, time: 1, data: { message: { role: 'assistant', content: [] } }, surfaceOp: 'append' },
+    withUsage(40, 0, 0), // 总量 0 → 忽略
+  ]
+  const model = buildSessionModel(events, [1, 10, 20])
+
+  const usage = usageAnchors(model)
+  eq(usage.source, 'usage', '识别出用量锚点')
+  eq(
+    usage.anchors.map((a) => [a.seq, a.total]),
+    [
+      [1, 1000],
+      [10, 3000],
+      [20, 4990],
+    ],
+    '锚点 = inputTokens + cacheReadTokens（忽略 0 与缺失）',
+  )
+  eq(usage.total, 4990, '总量取最近一次请求')
+  eq(usage.totalSeq, 20, '总量对应的 seq')
+  // 平时命中率取最近几次的**中位数**（单次冷启动/刚被打断不该当基线）
+  // 三个锚点分别是 700/1000=70%、2900/3000≈96.7%、4940/4990≈99.0% → 中位数 96.7%
+  eq(Math.round(usage.baselineHitRatePct), 97, '平时命中率 = 最近几次的中位数（不是单看最后一次）')
+  eq(Math.round(usage.lastHitRatePct), 99, '另外给出「最近一次」的命中率作对照')
+
+  const at1 = estimateBreakCost(usage, 1)
+  eq([at1.ok, at1.cached, at1.reprocess], [true, 0, 4990], '断点在最前面 → 全部重算')
+  const at10 = estimateBreakCost(usage, 10)
+  eq([at10.cached, at10.reprocess], [1000, 3990], '断点在 seq 10 → 可复用 seq 10 之前的 1000')
+  const at40 = estimateBreakCost(usage, 40)
+  eq([at40.cached, at40.reprocess], [4990, 0], '断点在最后 → 几乎不用重算')
+  eq(Math.round(at10.hitRatePct), 20, '命中率 = 可复用 / 总量')
+  eq(at10.approximate, true, '标注为估算')
+
+  const noUsage = usageAnchors(buildSessionModel([{ type: 'session', version: 4, seq: 0, id: 'x' }], [0]))
+  eq(noUsage.source, 'none', '没有用量时 source = none')
+  eq(estimateBreakCost(noUsage, 10).reason, 'NO_USAGE', '没有用量时给出 NO_USAGE')
+  eq(estimateBreakCost(usage, 'x').reason, 'BAD_SEQ', '非法 seq 被拒')
+
+  const occurrences = [
+    { seq: 20, imageIndex: 0 },
+    { seq: 10, imageIndex: 0 },
+    { seq: 10, imageIndex: 1 },
+  ]
+  const cost = costBySeq(model, occurrences)
+  eq(cost.bySeq.map((entry) => entry.seq), [10, 20], '每个带图片的 seq 一条（去重、升序）')
+  eq(
+    cost.bySeq.map((entry) => entry.reprocess),
+    [3990, 1990],
+    '各自的「若在此处打断」重算量（断点消息自身的内容也算进重算）',
+  )
+  eq(cost.source, 'usage', 'cost 带上用量来源')
 }
 
 // --------------------------------------------------------------- 3.7 引用索引缓存键

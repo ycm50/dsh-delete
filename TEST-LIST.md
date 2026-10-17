@@ -24,6 +24,18 @@
 | 判定细分 | `judgeLiveItems`：`IMAGE_INDEX_MISSING` / `SEQ_GONE` / `NOT_ON_SURFACE` / `BAD_ITEM` 分类；同一项重复勾选只报一次 | host-smoke |
 | 结果文案 | `offloadOutcome`：成功（含跳过项与删盘结果）、`NOTHING_TO_OFFLOAD`（说明原因）、失败（**必须带出宿主原始 `detail`**） | client-smoke |
 
+## 第三轮新增：摘除前的缓存代价预估
+
+| 组 | 覆盖 | 在哪套 |
+|---|---|---|
+| 用量锚点 | `usageAnchors`：`inputTokens + cacheReadTokens` 作为每次请求总量；忽略总量为 0 / 缺 `usage` / seq 非法的记录；`total` 取最近一次；**平时命中率取最近 5 次的中位数**（单次冷启动不当基线），另给 `lastHitRatePct` 对照 | image-smoke |
+| 断点代价 | `estimateBreakCost`：断点在最前 → 全量重算；断点居中 → 可复用其前一个锚点；断点在最后 → 重算≈0；命中率 = 可复用/总量；标注 `approximate`；无用量 → `NO_USAGE`，非法 seq → `BAD_SEQ` | image-smoke |
+| 按 seq 预算 | `costBySeq`：每个「带图片的 seq」一条（去重、升序），断点消息自身内容也算进重算 | image-smoke |
+| 宿主接线 | `/images` 带 `cost`（含 `source`/`total`/`bySeq`）；摘除报告带 `offload.cost`（断点 seq + 重算量） | host-smoke |
+| 选择联动 | `costForSelection`：多选取**最早**那条作断点；没选 / 无 `cost` / `bySeq` 空 → `null` | client-smoke |
+| 文案分支 | `costTextOf`：重算量大 → 给重算量+命中率+平时命中率；重算≤2000 → 「几乎不影响缓存」；**平时命中率<5% → 改说「不会额外损失缓存」**（真机里确有这种会话）；无用量 → 「无法估算」；`fmtTokens` 万级保留一位 / 十万级取整 | client-smoke |
+| 真机演练 | `real-image-audit.mjs` 对真实日志打印「若在此处打断」的预估（只读） | 真实数据只读审计 |
+
 ## `image-smoke` 覆盖明细（第 1 步新增）
 
 | 组 | 覆盖 |

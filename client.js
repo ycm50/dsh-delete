@@ -176,6 +176,13 @@ window.__ModuleLoader__.load({
       imgWhyBad: '选中的位置信息不完整',
       imgWhyUnknown: '请刷新后重试',
       imgSkippedItems: '其中 {n} 项被跳过',
+      imgCostLabel: '缓存代价预估：',
+      imgCostLine: '这一轮需重算 ≈ {re} token（仍命中 ≈ {cached} · 命中率 {rate}%，平时 {base}%）· 一次性，之后恢复',
+      imgCostTiny: '断点靠后，几乎不影响缓存：需重算 ≈ {re} token',
+      imgCostNoCache: '这个会话平时就没有缓存命中（≈{base}%），摘除不会额外损失缓存；只是把图片换成占位文本（这一轮仍需处理 ≈{total} token）',
+      imgCostUnknown: '无法估算缓存代价（这个会话还没有用量记录）',
+      imgCostWhy: '断点 = 最早被摘除的那张图所在的消息（{seq}）；其后内容要重算一次',
+      imgCostImages: '图片换成占位文本后实际请求会略小',
       imgLoadFailed: '读取失败：{msg}',
       imgThumbFail: '缩略图加载失败',
       imgTabHint: '图片管理 —— 统计张数、多选摘除、按需删除原文件',
@@ -296,6 +303,13 @@ window.__ModuleLoader__.load({
       imgWhyBad: 'the selected positions are incomplete',
       imgWhyUnknown: 'refresh and try again',
       imgSkippedItems: '{n} item(s) skipped',
+      imgCostLabel: 'Cache cost estimate: ',
+      imgCostLine: 'this turn re-processes ≈ {re} tokens (still cached ≈ {cached} · hit {rate}%, normally {base}%) — one-off, recovers afterwards',
+      imgCostTiny: 'break point is late, so cache is barely affected: ≈ {re} tokens re-processed',
+      imgCostNoCache: 'this session is not getting cache hits (≈{base}%), so offloading costs no extra cache; it only turns images into placeholder text (this turn still handles ≈{total} tokens)',
+      imgCostUnknown: 'cannot estimate the cache cost (this session has no usage records yet)',
+      imgCostWhy: 'break point = the message holding the earliest offloaded image ({seq}); everything after it is re-processed once',
+      imgCostImages: 'the real request is slightly smaller once images become placeholder text',
       imgLoadFailed: 'Load failed: {msg}',
       imgThumbFail: 'thumbnail failed',
       imgTabHint: 'Image manager — count, multi-select offload, optional disk deletion',
@@ -500,9 +514,62 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** token 数的紧凑显示（12.3k / 1.2M）。 */
+    function fmtTokens(value) {
+      const n = Number(value)
+      if (!Number.isFinite(n) || n < 0) return '0'
+      if (n < 1000) return String(Math.round(n))
+      // 万级保留一位（74.9k 有信息量），十万级以上取整（452k）
+      if (n < 1e5) return (n / 1000).toFixed(1) + 'k'
+      if (n < 1e6) return (n / 1000).toFixed(0) + 'k'
+      return (n / 1e6).toFixed(1) + 'M'
+    }
+
+    /**
+     * 从宿主的 `cost.bySeq` 里取出「当前选择会造成多大缓存代价」（纯函数）。
+     *
+     * 规则：断点 = **被选中的最早那条消息**（其后内容都要重算），所以取选中项里
+     * 最小的 seq 对应的那条预估。选得越老，代价越大——这正是要提前告诉用户的。
+     *
+     * @param cost     宿主 /images 返回的 `cost`（`{bySeq:[{seq,ok,reprocess,...}]}`）
+     * @param selected 选中项的 key 集合（形如 "818:0"）
+     * @returns 命中的那条预估，或 null（没选 / 没有用量数据）
+     */
+    function costForSelection(cost, selected) {
+      if (cost === null || cost === undefined) return null
+      const bySeq = Array.isArray(cost.bySeq) ? cost.bySeq : []
+      if (bySeq.length === 0) return null
+      let minSeq = null
+      for (const key of selected ?? []) {
+        const seq = Number(String(key).split(':')[0])
+        if (!Number.isFinite(seq)) continue
+        if (minSeq === null || seq < minSeq) minSeq = seq
+      }
+      if (minSeq === null) return null
+      return bySeq.find((entry) => entry?.seq === minSeq) ?? null
+    }
+
+    /** 把代价预估翻成一句话（纯函数）。 */
+    function costTextOf(estimate) {
+      if (estimate === null || estimate === undefined) return ''
+      if (estimate.ok !== true) return t('imgCostUnknown')
+      const re = fmtTokens(estimate.reprocess)
+      const base =
+        estimate.baselineHitRatePct === null || estimate.baselineHitRatePct === undefined
+          ? null
+          : Number(estimate.baselineHitRatePct)
+      // 这个会话平时就没有缓存命中 → 摘除不会「额外」损失缓存，别用命中率误导人
+      if (base !== null && base < 5) {
+        return t('imgCostNoCache', { base: base.toFixed(1), total: fmtTokens(estimate.total) })
+      }
+      if (Number(estimate.reprocess) <= 2000) return t('imgCostTiny', { re })
+      const rate =
+        estimate.hitRatePct === null || estimate.hitRatePct === undefined ? '-' : Number(estimate.hitRatePct).toFixed(1)
+      return t('imgCostLine', { re, cached: fmtTokens(estimate.cached), rate, base: base === null ? '-' : base.toFixed(1) })
+    }
+
     /** 把宿主报告里的「跳过原因」翻成一句话。 */
-    function whyOf(reason) {
-      if (reason === 'ALREADY_OFFLOADED') return t('imgWhyOffloaded')
+    function whyOf(reason) {      if (reason === 'ALREADY_OFFLOADED') return t('imgWhyOffloaded')
       if (reason === 'NOT_ON_SURFACE') return t('imgWhyOffscreen')
       if (reason === 'SEQ_GONE') return t('imgWhyOffscreen')
       if (reason === 'IMAGE_INDEX_MISSING') return t('imgWhyMissing')
@@ -1043,6 +1110,9 @@ window.__ModuleLoader__.load({
       '.dshdel-img-foot .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dshdel-img-cb{display:flex;align-items:flex-start;gap:6px;cursor:pointer;line-height:1.35}',
       '.dshdel-img-warn{color:var(--color-amber-500,#e0a800)}',
+      '.dshdel-img-cost{font-size:11px;line-height:1.4;color:var(--dsw-alias-label-secondary,#9a9aa2);background:color-mix(in srgb,var(--color-amber-500,#e0a800) 8%,transparent);border-radius:6px;padding:4px 6px}',
+      '.dshdel-img-cost-label{font-weight:600;color:var(--color-amber-500,#e0a800);margin-right:4px}',
+      '.dshdel-img-cost-note{font-size:10px;opacity:.85;margin-top:2px}',
       '.dshdel-img-empty{padding:22px 12px;text-align:center;color:var(--dsw-alias-label-secondary,#9a9aa2)}',
       '.dshdel-img-confirm{padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--color-red-600,#c0392b) 14%,transparent)}',
       '.dshdel-img-list{margin:6px 0 0;padding-left:16px;max-height:120px;overflow:auto}',
@@ -1627,6 +1697,9 @@ window.__ModuleLoader__.load({
       const diskBytes = diskDeletable.reduce((total, entry) => total + (Number(entry.bytes) || 0), 0)
       const canAct = picked.count > 0 && data?.offloadAllowed === true && busy !== true
       const hint = data?.offloadAllowed === true ? '' : String(data?.offloadBlockedReason ?? '')
+      /** 缓存代价预估：断点 = 被选中的最早那条消息；没选就没有。 */
+      const costEstimate = costForSelection(data?.cost ?? null, selected)
+      const costText = costTextOf(costEstimate)
 
       /** 勾选复选框：跟随键盘/点按都可。 */
       const onToggle = (item) => setSelected((prev) => toggleSelection(prev, item))
@@ -1855,6 +1928,19 @@ window.__ModuleLoader__.load({
             picked.count > 0 ? h('span', { className: 'dshdel-img-sub' }, t('imgReclaim', { size: fmtBytes(picked.bytes) })) : null,
           ),
 
+          // 摘除前的「缓存代价预估」：告诉用户这一轮要重算多少 token、命中率会掉到多少
+          picked.count > 0
+            ? h(
+                'div',
+                { className: 'dshdel-img-cost' },
+                h('span', { className: 'dshdel-img-cost-label' }, t('imgCostLabel')),
+                h('span', null, costText),
+                costEstimate?.ok === true && Number(costEstimate.reprocess) > 2000
+                  ? h('div', { className: 'dshdel-img-cost-note' }, t('imgCostWhy', { seq: String(costEstimate.seq) }) + ' · ' + t('imgCostImages'))
+                  : null,
+              )
+            : null,
+
           h(
             'label',
             { className: 'dshdel-img-cb' },
@@ -1899,6 +1985,14 @@ window.__ModuleLoader__.load({
                 deleteDisk && diskShared.length > 0
                   ? h('p', { style: { margin: '4px 0' }, className: 'dshdel-img-warn' }, t('imgConfirmForce', { n: diskShared.length }))
                   : null,
+                costText === ''
+                  ? null
+                  : h(
+                      'p',
+                      { style: { margin: '4px 0' }, className: 'dshdel-img-cost' },
+                      h('span', { className: 'dshdel-img-cost-label' }, t('imgCostLabel')),
+                      h('span', null, costText),
+                    ),
                 h(
                   'ul',
                   { className: 'dshdel-img-list' },
@@ -2217,6 +2311,9 @@ window.__ModuleLoader__.load({
         sourceBadgeOf,
         offloadOutcome,
         whyOf,
+        fmtTokens,
+        costForSelection,
+        costTextOf,
       },
     }
   },

@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import {
   buildOffloadEvent,
   buildSessionModel,
+  costBySeq,
   inventoryOccurrences,
   listSessionLogs,
   planOffload,
@@ -36,6 +37,7 @@ let totalOccurrences = 0
 let totalRetained = 0
 let totalOffloaded = 0
 let checkedTargets = 0
+let checkedEstimates = 0
 let broken = 0
 
 for (const entry of logs) {
@@ -119,6 +121,33 @@ for (const entry of logs) {
       checkedTargets += 1
       if (filter !== '') console.log('    演练 targets=' + JSON.stringify(buildOffloadEvent(plan.targets)))
     }
+
+    // 缓存代价预估演练（只读）：断点 = 这张图所在消息
+    const cost = costBySeq(model, occurrences)
+    const estimate = cost.bySeq.find((entry) => entry.seq === first.seq)
+    if (estimate?.ok === true) {
+      const rate = Number(estimate.hitRatePct).toFixed(1)
+      const base =
+        estimate.baselineHitRatePct === null || estimate.baselineHitRatePct === undefined
+          ? '-'
+          : Number(estimate.baselineHitRatePct).toFixed(1)
+      console.log(
+        '    预估（只读）：在 seq ' +
+          estimate.seq +
+          ' 处打断缓存 → 这一轮重算 ≈ ' +
+          estimate.reprocess +
+          ' token（可复用 ' +
+          estimate.cached +
+          '，命中率 ' +
+          rate +
+          '%，平时 ' +
+          base +
+          '%）',
+      )
+      checkedEstimates += 1
+    } else if (filter !== '') {
+      console.log('    预估（只读）：该会话没有用量记录，无法估算')
+    }
   }
 
   totalOccurrences += totals.occurrences
@@ -143,6 +172,8 @@ console.log(
     totalOffloaded +
     '）；选点演练 ' +
     checkedTargets +
+    ' 次；缓存代价预估演练 ' +
+    checkedEstimates +
     ' 次；反查不一致 ' +
     broken +
     ' 处',

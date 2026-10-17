@@ -36,7 +36,10 @@ import {
   buildSessionModelFromSession,
   classifyAttachmentObject,
   countVariantFiles,
+  costBySeq,
   DEFAULT_SCAN_CONCURRENCY,
+  estimateBreakCost,
+  usageAnchors,
   executeDiskDeletion,
   inventoryOccurrences,
   listSessionLogs,
@@ -752,6 +755,8 @@ export function apply(ctx, config) {
               totals: view.totals,
               items: view.occurrences,
               offloadEvents: view.offloadEvents,
+              /** 缓存代价预估：每个带图片的 seq 若成为「断点」，这一轮要重算多少 token。 */
+              cost: costBySeq(view.model, view.occurrences),
               diskPlan,
               refScan: refScanMeta,
               variantCache: countVariantFiles(home),
@@ -994,6 +999,8 @@ export async function offloadSessionImages(options) {
       count: judged.accepted.length,
       items: judged.accepted,
       skipped: judged.skipped,
+      /** 这次摘除对前缀缓存的一次性代价（最早那条被改消息起要重算多少 token）。 */
+      cost: estimateFor(model, targets),
       appended: false,
     },
   }
@@ -1083,6 +1090,20 @@ export function judgeLiveItems(model, items) {
     })
   }
   return { accepted, skipped }
+}
+
+/**
+ * 这次摘除对前缀缓存的一次性代价预估（断点 = **最早**那条被改消息）。
+ * 用实测的用量锚点算，误差量级 ~1%（见 lib/image-logic.js 的 usageAnchors 注释）。
+ */
+function estimateFor(model, targets) {
+  const seqs = (targets ?? []).map((t) => t.seq).filter((seq) => Number.isSafeInteger(seq))
+  if (seqs.length === 0) return null
+  try {
+    return estimateBreakCost(usageAnchors(model), Math.min(...seqs))
+  } catch {
+    return null
+  }
 }
 
 /**

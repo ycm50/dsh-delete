@@ -367,7 +367,17 @@ function makeImageEvents() {
   return [
     { type: 'session', version: 4, seq: 0, id: IMG_SESSION, createdAt: 1000, cwd: 'A:\\Downloads', isSeeded: false, delegationDepth: 0 },
     imageToolResult(0, { attachmentId: ATT_A_ID, sourcePath: SRC_WITH_IMG, time: 100 }),
-    { type: 'assistant/message', seq: 1, time: 110, data: { message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }, surfaceOp: 'append' },
+    // 带用量的 assistant 消息：缓存代价预估就靠它算（总量 = inputTokens + cacheReadTokens = 1000）
+    {
+      type: 'assistant/message',
+      seq: 1,
+      time: 110,
+      data: {
+        message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+        usage: { inputTokens: 100, cacheReadTokens: 900 },
+      },
+      surfaceOp: 'append',
+    },
     imageToolResult(5, { attachmentId: ATT_B_ID, sourcePath: join(sandbox, 'shots', 'gone.png'), time: 120 }),
   ]
 }
@@ -416,6 +426,13 @@ function makeSession(records) {
   eq(payload.offloadAllowed, true, '活会话且未在跑 → 允许摘除')
   eq(payload.imageManagerEnabled, true, '如实报告面板开关')
 
+  // 缓存代价预估：每个带图片的 seq 一条；越早的图代价越大
+  eq(payload.cost?.source, 'usage', '盘点带上用量来源')
+  eq(payload.cost?.total, 1000, '总量 = 最近一次请求的 inputTokens + cacheReadTokens')
+  eq(payload.cost?.bySeq?.map((entry) => entry.seq), [0, 5], '为每个带图片的 seq 预算一条')
+  eq(payload.cost?.bySeq?.[0]?.reprocess, 1000, '断点在最前面（seq 0）→ 全部重算')
+  eq(payload.cost?.bySeq?.[1]?.reprocess, 0, '断点在 seq 5 → 前面的可复用，不用重算')
+
   const noId = fakeRes()
   imagesRoute.handler({ url: '/plugins/dsh-delete/images' }, noId)
   await settle(noId)
@@ -463,6 +480,8 @@ function makeSession(records) {
   eq(records.length, 1, 'append 被调用一次')
   eq(records[0].type, 'image/offload', '追加的事件类型是 image/offload')
   eq(records[0].data, { targets: [{ seq: 5, imageIndexes: [0] }] }, '事件数据体形状与本体要求一致')
+  eq(payload.offload.cost?.seq, 5, '报告里带上这次摘除的缓存代价（断点 seq）')
+  eq(payload.offload.cost?.reprocess, 0, '断点靠后 → 这一轮几乎不用重算')
 
   // 用**本体真实的投影**验收我们写的事件（从本机 app.asar 里读出来跑，不自己给自己打分）
   const projection = await loadNativeImageOffloadProjection()

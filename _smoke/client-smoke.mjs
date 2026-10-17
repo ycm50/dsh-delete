@@ -99,6 +99,9 @@ const {
   sourceBadgeOf,
   offloadOutcome,
   whyOf,
+  fmtTokens,
+  costForSelection,
+  costTextOf,
 } = mod._internals
 
 // ------------------------------------------------------------- 测试数据
@@ -639,6 +642,50 @@ ok(!threw, 'apply(undefined / null / {}) 都不应抛错')
   const bare = offloadOutcome({ ok: false, error: 'SOMETHING' })
   eq(bare, t('imgError', { msg: 'SOMETHING' }), '没有 detail 时退回只显示错误码')
   eq(offloadOutcome(null), '', 'null 报告 → 空文案')
+
+  // ---- 缓存代价预估 ----
+  eq(fmtTokens(999), '999', 'fmtTokens: 三位以下原样')
+  eq(fmtTokens(74870), '74.9k', 'fmtTokens: 万级保留一位')
+  eq(fmtTokens(1234567), '1.2M', 'fmtTokens: 百万级')
+  eq(fmtTokens('x'), '0', 'fmtTokens: 非法值归零')
+
+  const cost = {
+    source: 'usage',
+    total: 451758,
+    baselineHitRatePct: 99.9,
+    bySeq: [
+      { ok: true, seq: 818, total: 451758, cached: 376888, reprocess: 74870, hitRatePct: 83.4, baselineHitRatePct: 99.9 },
+      { ok: true, seq: 6888, total: 451758, cached: 451456, reprocess: 302, hitRatePct: 99.9, baselineHitRatePct: 99.9 },
+    ],
+  }
+  // 断点 = 被选中的最早那条：选 (818) 与 (6888) → 取 818 那条
+  const pickWorst = costForSelection(cost, new Set(['818:0', '6888:0']))
+  eq(pickWorst?.seq, 818, '多选时取最早的那条作为断点（代价最大）')
+  const pickLatest = costForSelection(cost, new Set(['6888:0']))
+  eq(pickLatest?.seq, 6888, '只选最新的那张 → 断点靠后')
+  eq(costForSelection(cost, new Set()), null, '没选 → 无预估')
+  eq(costForSelection(null, new Set(['818:0'])), null, '没有 cost 数据 → 无预估')
+  eq(costForSelection({ bySeq: [] }, new Set(['818:0'])), null, 'bySeq 为空 → 无预估')
+
+  const bigText = costTextOf(pickWorst)
+  eq(bigText.includes('74.9k'), true, '代价文案带重算 token 数')
+  eq(bigText.includes('83.4'), true, '代价文案带断点后的命中率')
+  eq(bigText.includes('99.9'), true, '代价文案带平时命中率作对比')
+  eq(costTextOf(pickLatest), t('imgCostTiny', { re: '302' }), '重算量很小 → 用「几乎不影响缓存」的说法')
+  eq(costTextOf({ ok: false, reason: 'NO_USAGE' }), t('imgCostUnknown'), '没有用量记录 → 说明无法估算')
+  eq(costTextOf(null), '', 'null 预估 → 空文案')
+
+  // 该会话平时就没有缓存命中（真机里确实有这种会话）→ 不能说「命中率要掉」，否则误导
+  const noCache = costTextOf({
+    ok: true,
+    seq: 10,
+    total: 385017,
+    cached: 313136,
+    reprocess: 71881,
+    hitRatePct: 81.3,
+    baselineHitRatePct: 0.6,
+  })
+  eq(noCache, t('imgCostNoCache', { base: '0.6', total: '385k' }), '平时命中率 <5% → 改成「不会额外损失缓存」的说法')
 }
 
 // ------------------------------------------------------------------- 收尾
