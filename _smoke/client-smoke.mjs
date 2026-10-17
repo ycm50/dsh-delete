@@ -70,8 +70,36 @@ ok(Array.isArray(mod?.inject), 'factory 应返回 inject 数组')
 eq(mod?.inject?.length, 0, 'inject 应为空（依赖全部运行时探测）')
 eq(typeof mod?.apply, 'function', 'factory 应返回 apply')
 
-const { buildRows, buildTree, descendantsOf, siblingsOf, rootOf, cascadeSelection, subagentIds, fmtBytes, t } =
-  mod._internals
+const {
+  buildRows,
+  buildTree,
+  descendantsOf,
+  siblingsOf,
+  rootOf,
+  cascadeSelection,
+  subagentIds,
+  fmtBytes,
+  t,
+  identityKey,
+  baseName,
+  archivedIdsOf,
+  workspaceLabelOf,
+  refreshSessionList,
+  IMAGE_TAB_ID,
+  IMAGE_TAB_KIND,
+  keyOfItem,
+  selectable,
+  originOf,
+  applyFilters,
+  liveSelection,
+  toggleSelection,
+  pickOldest,
+  pickAllButNewest,
+  selectionSummary,
+  sourceBadgeOf,
+  offloadOutcome,
+  whyOf,
+} = mod._internals
 
 // ------------------------------------------------------------- 测试数据
 
@@ -216,6 +244,147 @@ eq(t('confirmTitle', { n: 2 }), '确认删除 2 个会话？', '词条占位替�
 eq(t('nonexistent-key'), 'nonexistent-key', '缺词回退到 key 本身')
 eq(t('remove'), '删除选中', '无参数词条')
 
+// ------------------------- 回归：id 别名、标题、类型、归档（用户报的三类 bug）
+
+/**
+ * 回归背景（用户实测截图）：
+ *   1. **会话名识别错误**：子 agent 会话在面板里显示成 "Downloads"（cwd 目录名），
+ *      而磁盘日志里明明白白写着它的真实标题；根会话则显示成裸 id。
+ *   2. **会话类型识别错误**：根会话被打上「子 agent」徽章（subagent 投影的空对象
+ *      被当成"是子 agent"）；同时磁盘名被剥成裸 uuid，导致快照行与磁盘行对不上，
+ *      同一会话出现两行、running 之类信息各缺一半。
+ *   3. **删不干净**：裸 uuid 目录（子 agent）旧版根本扫不到；而且归档/删除用的
+ *      id 写法跟宿主认识的对不上，文件删了但左侧栏里的行还在。
+ * 下面这几组断言把这三点钉死。
+ */
+
+const H = '11111111-0000-4000-8000-00000000000b' // 根：磁盘写 session-<H>，快照写 <H>
+const I = '22222222-0000-4000-8000-00000000000c' // 子 agent：磁盘写 <I>，父 id 写 session-<H>
+const J = '33333333-0000-4000-8000-00000000000d' // 只在快照里（宿主内存里的会话）
+
+const inventory2 = {
+  items: [
+    {
+      id: 'session-' + H,
+      ids: ['session-' + H, H],
+      bytes: 500,
+      dirs: ['h'],
+      files: [],
+      projFiles: [],
+      workspaceSlug: '--ws--',
+      // 磁盘侧（header / 日志）给的标题与类型
+      meta: { title: '磁盘标题', cwd: 'C:\\w', isSubagent: false, createdAt: 1000 },
+    },
+    {
+      id: I,
+      ids: [I],
+      bytes: 200,
+      dirs: ['i'],
+      files: [],
+      projFiles: [],
+      workspaceSlug: '--ws--',
+      meta: { title: '# 任务：子任务标题', cwd: 'C:\\w', isSubagent: true, parentId: 'session-' + H, createdAt: 1500 },
+    },
+  ],
+}
+
+const snapshot2 = {
+  [H]: { id: H, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: '', origin: '', running: false, blank: false, updatedAt: 9000 },
+  [I]: { id: I, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: 'session-' + H, origin: 'subagent', running: true, blank: false, updatedAt: 8000 },
+  [J]: { id: J, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: '', origin: '', running: false, blank: false, updatedAt: 7000 },
+}
+
+const rows2 = buildRows(inventory2, snapshot2)
+eq(rows2.length, 3, '两种 id 写法必须合并成 3 行（旧版会多出一行"仅磁盘"）')
+const byKey2 = new Map(rows2.map((r) => [identityKey(r.id), r]))
+const rowH = byKey2.get(H)
+const rowI = byKey2.get(I)
+const rowJ = byKey2.get(J)
+ok(rowH !== undefined, '磁盘上带前缀的会话应出现在合并结果里')
+ok(rowI !== undefined, '磁盘上裸 uuid 的子 agent 应出现在合并结果里')
+eq(rowH.id, H, '行的 id 优先取快照里的那个（宿主认识的写法）')
+eq(rowH.diskOnly, false, '磁盘行与快照行合并后不再标「仅磁盘」')
+eq(rowH.title, '磁盘标题', '快照没有持久标题时用磁盘标题，而不是 cwd 目录名')
+eq(rowI.title, '# 任务：子任务标题', '子 agent 的真实标题来自磁盘（旧版显示 Downloads）')
+eq(rowI.isSubagent, true, '子 agent 类型正确（快照 origin + 磁盘 header）')
+eq(rowI.running, true, '子 agent 的运行状态来自快照')
+eq(rowI.parentId, 'session-' + H, '父 id 保留宿主写法')
+eq(rowJ.title, 'Downloads', '只有快照的会话退回 DSH 的 displayTitle')
+eq(rowH.paths, 1, '合并后路径数来自磁盘盘点')
+
+const tree2 = buildTree(rows2)
+eq(tree2.roots.length, 2, '父 id 与子行 id 写法不同也要能挂上（H / J 是根）')
+eq(tree2.childrenOf.get(H), [I], '子 agent 挂在父行下（跨前缀写法）')
+eq(descendantsOf(tree2, H), [I], '后代计算跨前缀写法')
+eq(subagentIds(rows2).sort(), [I], '「全选子 agent」只挑真正的子 agent 行')
+
+// 纯函数：id 归一与路径末段
+eq(identityKey('session-' + H), H, 'identityKey 剥掉 session- 前缀')
+eq(identityKey(H), H, 'identityKey 对裸 uuid 幂等')
+eq(identityKey('session-' + H.toUpperCase()), H, 'identityKey 大小写不敏感')
+eq(baseName('A:\\Downloads'), 'Downloads', 'baseName 取目录末段')
+eq(baseName('A:\\Downloads\\'), 'Downloads', 'baseName 忽略结尾分隔符')
+eq(workspaceLabelOf({ cwd: 'A:\\Downloads', workspaceSlug: '--A-Downloads--' }), 'Downloads', '工作区展示名用 cwd 末段')
+eq(workspaceLabelOf({ cwd: '', workspaceSlug: '--A-Downloads--' }), '--A-Downloads--', '没有 cwd 时退回磁盘目录键')
+
+// 归档 / 刚删除的标记（面板要把这两件事显示出来）
+const rows3 = buildRows(inventory2, snapshot2, { archived: ['session-' + H], removed: ['session-' + I] })
+const byKey3 = new Map(rows3.map((r) => [identityKey(r.id), r]))
+ok(byKey3.get(H).archived === true, '已归档集合按 id 别名匹配（前缀写法也算命中）')
+ok(byKey3.get(I).removed === true, '本次删掉的会话标记为已删除')
+ok(byKey3.get(J).archived === false, '没归档的会话不带归档标记')
+
+const fakeCtx = {
+  get: (name) =>
+    name === 'workspaces'
+      ? { list: { getSnapshot: () => ({ archivedSessionIds: ['session-' + H] }) } }
+      : undefined,
+}
+eq(archivedIdsOf(fakeCtx).has('session-' + H), true, 'archivedIdsOf 读工作区服务的归档集合')
+eq(archivedIdsOf(undefined).size, 0, '读不到工作区服务时返回空集')
+eq(
+  archivedIdsOf({ get: () => ({ list: { getSnapshot: () => { throw new Error('boom') } } }) }).size,
+  0,
+  '工作区服务抛错时返回空集（不能让面板打不开）',
+)
+
+// 新增词条
+eq(t('pathsLabel', { n: 3 }), '3 条路径', '路径数词条')
+eq(t('badgeArchived'), '已归档', '已归档徽章词条')
+eq(t('badgeRemoved'), '已删除', '已删除徽章词条')
+
+// 刷新探测：客户端 sessions 服务的 refresh() 才是官方入口（历史 bug：写成 entry.fn 永远调不到）
+{
+  let called = 0
+  let thisOk = false
+  const sessions = {
+    refresh() {
+      called += 1
+      thisOk = this === sessions
+    },
+  }
+  eq(refreshSessionList({ get: (name) => (name === 'sessions' ? sessions : undefined) }), true, '有 sessions.refresh 时应调用它')
+  eq(called, 1, 'refresh 只调一次')
+  eq(thisOk, true, 'refresh 必须以服务自身为 this 调用')
+
+  let legacy = 0
+  const legacyList = {
+    reload() {
+      legacy += 1
+    },
+  }
+  eq(refreshSessionList({ get: () => ({ list: legacyList }) }), true, '老版本只有 list.reload 时也能刷新')
+  eq(legacy, 1, 'list.reload 被调用')
+
+  eq(refreshSessionList({ get: () => ({}) }), false, '没有任何刷新方法时返回 false')
+  eq(refreshSessionList(undefined), false, 'ctx 缺失时返回 false')
+  eq(
+    refreshSessionList({ get: () => ({ refresh() { throw new Error('boom') } }) }),
+    false,
+    '刷新抛错时返回 false 且不冒泡',
+  )
+}
+
 // --------------------------------------- apply / 插槽登记（历史 bug 的回归测试）
 
 /**
@@ -225,7 +394,7 @@ eq(t('remove'), '删除选中', '无参数词条')
  * 找不到任何删除功能）。下面这几条断言把那个写法钉死。
  */
 
-function makeCtx({ withSlots = true } = {}) {
+function makeCtx({ withSlots = true, withRightTabs = true } = {}) {
   const registered = []
   const effects = []
   const slots = {
@@ -238,8 +407,20 @@ function makeCtx({ withSlots = true } = {}) {
       return () => {}
     },
   }
+  const sidebarRightTabs = {
+    register(definition) {
+      registered.push(definition)
+      return () => {}
+    },
+  }
+  const sidebarRight = { openTab() {} }
   const owner = {
-    get: (name) => (name === 'slots' && withSlots ? slots : undefined),
+    get: (name) => {
+      if (name === 'slots' && withSlots) return slots
+      if (name === 'sidebarRightTabs' && withRightTabs) return sidebarRightTabs
+      if (name === 'sidebarRight') return sidebarRight
+      return undefined
+    },
     effect: (fn, label) => {
       effects.push(label)
       return fn()
@@ -296,6 +477,169 @@ try {
   threw = true
 }
 ok(!threw, 'apply(undefined / null / {}) 都不应抛错')
+
+// ------------------------------------------------ 右侧栏「图片管理」页签（四段式挂载）
+
+{
+  delete sandbox.__dshDeleteStore__
+  const ctxTabs = makeCtx()
+  mod.apply(ctxTabs)
+  const tab = ctxTabs._registered.find((r) => r !== null && typeof r === 'object' && r.id === IMAGE_TAB_ID)
+  ok(tab !== undefined, 'apply 必须把页签定义注册进 sidebarRightTabs')
+  eq(tab?.kind, IMAGE_TAB_KIND, '页签定义带 kind')
+  eq(tab?.multiple, true, '多个会话各开一个页签（multiple: true）')
+  eq(typeof tab?.title, 'function', '页签标题是函数（语言切换后取新词）')
+  eq(t('imgTab'), tab?.title(), '页签标题用词条 imgTab')
+  eq(Array.isArray(tab?.guide) && tab.guide.length > 0, true, '带空态引导入口')
+  eq(tab?.guide?.[0]?.title(), t('imgTab'), '引导入口的标题可翻译')
+
+  const body = ctxTabs._registered.find(
+    (r) => r !== null && typeof r === 'object' && r.name === 'sidebar.right.pane.tab',
+  )
+  ok(body !== undefined, '必须注册 sidebar.right.pane.tab 正文')
+  eq(body?.key, IMAGE_TAB_ID, '正文的 key 与页签定义 id 一致')
+  eq(typeof body?.inject, 'function', '正文要能按会话注入')
+  eq(body.inject('sess-1').sessionId, 'sess-1', '正文注入会话 id')
+  eq(typeof body.inject('sess-1').openTab, 'function', '正文注入 openTab（冷会话时用来打开会话）')
+
+  const title = ctxTabs._registered.find(
+    (r) => r !== null && typeof r === 'object' && r.name === 'sidebar.right.pane.tab.title',
+  )
+  ok(title !== undefined, '必须注册 sidebar.right.pane.tab.title')
+  eq(title?.key, IMAGE_TAB_ID, '标题 chip 的 key 与定义 id 一致')
+
+  ok(
+    ctxTabs._effects.some((label) => String(label).includes('image tab')),
+    '页签登记挂在 owner.effect 上（声明式注入找不到 fiber 时不会留下悬空注册）',
+  )
+}
+
+// 降级：宿主没有 sidebarRightTabs 时不能抛，删除功能照旧
+{
+  delete sandbox.__dshDeleteStore__
+  const ctxNoTabs = makeCtx({ withRightTabs: false })
+  let tabThrew = false
+  try {
+    mod.apply(ctxNoTabs)
+  } catch {
+    tabThrew = true
+  }
+  ok(!tabThrew, '缺 sidebarRightTabs 时 apply 不应抛错')
+  ok(ctxNoTabs._registered.includes('sidebar.footer.action'), '缺 sidebarRightTabs 时侧边栏入口照旧注册')
+  ok(
+    warnings.some((w) => w.includes('sidebarRightTabs')),
+    '缺 sidebarRightTabs 时留下警告（而不是静默失败）',
+  )
+}
+
+// ------------------------------------------------ 图片管理的纯选择逻辑
+
+{
+  const now = 1_700_000_000_000
+  const mk = (seq, imageIndex, time, extra) => ({
+    seq,
+    imageIndex,
+    time,
+    bytes: 10,
+    width: 4,
+    height: 4,
+    name: 'n' + String(seq) + '.png',
+    attachmentId: 'sha256:' + String(seq).padStart(2, '0').repeat(32),
+    origin: 'tool/result',
+    heldPath: 'A:\\x\\n' + String(seq) + '.png',
+    offloaded: false,
+    ...(extra ?? {}),
+  })
+  const items = [
+    mk(0, 0, now - 10 * 86400e3),
+    mk(1, 0, now - 3 * 86400e3),
+    mk(2, 0, now - 3600e3, { origin: 'user/message', name: 'mine.png' }),
+    mk(3, 0, now - 1000, { offloaded: true }),
+  ]
+
+  eq(keyOfItem({ seq: 7, imageIndex: 2 }), '7:2', '出现位置的稳定键')
+  eq(
+    selectable(items).map((i) => i.seq),
+    [0, 1, 2],
+    '已摘除的不在可操作集合里',
+  )
+
+  const oldest2 = pickOldest(items, new Set(), 2)
+  eq([...oldest2].sort(), ['0:0', '1:0'], '「最早 N 张」按时间取，跳过已摘除')
+  eq([...pickOldest(items, new Set(), 99)].length, 3, 'N 超过总数时取全部')
+  eq([...pickOldest(items, oldest2, 1)].length, 2, '「最早 N 张」是追加：已在选择里的不重复计数')
+  eq([...pickOldest(items, oldest2, 3)].length, 3, '「最早 N 张」追加后覆盖全部可操作项')
+
+  const keep1 = pickAllButNewest(items, new Set(), 1)
+  eq([...keep1].sort(), ['0:0', '1:0'], '「除最近 N 张外全部」保留最新 N 张')
+  const keep0 = pickAllButNewest(items, new Set(), 0)
+  eq([...keep0].sort(), ['0:0', '1:0', '2:0'], 'N=0 时选全部可操作的')
+
+  eq(applyFilters(items, { query: 'mine' }).map((i) => i.seq), [2], '按文件名搜索')
+  eq(applyFilters(items, { origin: 'user' }).map((i) => i.seq), [2], '按来源筛选（你上传的）')
+  eq(applyFilters(items, { origin: 'tool' }).map((i) => i.seq), [0, 1], '按来源筛选（工具）不含已摘除')
+  eq(applyFilters(items, { origin: 'tool', includeOffloaded: true }).map((i) => i.seq), [0, 1, 3], 'includeOffloaded 时才带已摘除项')
+  eq(applyFilters(items, { time: 'day', now }).map((i) => i.seq), [2], '按时间筛选（最近 24 小时）')
+  eq(applyFilters(items, { time: 'week', now, includeOffloaded: true }).map((i) => i.seq), [1, 2, 3], '按时间筛选（最近 7 天）')
+  eq(applyFilters(items, {}).map((i) => i.seq), [0, 1, 2], '无筛选时只给可操作项')
+
+  const one = selectionSummary(items, new Set(['1:0']))
+  eq(one.count, 1, '选择合计张数')
+  eq(one.bytes, 10, '选择合计字节')
+  eq(one.attachmentIds.length, 1, '选择涉及的附件 id')
+
+  const stale = liveSelection(items, new Set(['1:0', '3:0', '99:0']))
+  eq([...stale], ['1:0'], '选择收缩：已摘除 / 已消失的自动丢掉')
+
+  eq([...toggleSelection(new Set(), items[0])], ['0:0'], '勾选')
+  eq([...toggleSelection(new Set(['0:0']), items[0])], [], '取消勾选')
+  eq([...toggleSelection(new Set(), items[3])], [], '已摘除的勾不上')
+
+  eq(originOf(items[2]), 'user', 'origin 归一（user/message → user）')
+  eq(originOf(items[0]), 'tool', 'origin 归一（tool/result → tool）')
+
+  // 源文件徽标：读删盘计划里的同名条目
+  const badge = sourceBadgeOf(items[0], {
+    diskPlan: [{ kind: 'source', path: items[0].heldPath, action: 'SKIPPED', reason: 'SHARED_WITH_OTHER_SESSION', referencedBy: ['a', 'b'] }],
+  })
+  eq(badge.text, t('imgShared', { n: 2 }), '源文件徽标：被别的会话引用')
+  const badge2 = sourceBadgeOf(items[0], {
+    diskPlan: [{ kind: 'source', path: items[0].heldPath, action: 'DELETE', scope: 'outside-workspace', risk: 'medium' }],
+  })
+  eq(badge2.text, t('imgOutsideWorkspace'), '源文件徽标：工作区外')
+
+  // 结果文案：三种结局必须分得清，尤其**必须带出宿主的原始错误文本**
+  const okText = offloadOutcome({
+    ok: true,
+    offload: { count: 3, skipped: [{ seq: 1, imageIndex: 0, reason: 'ALREADY_OFFLOADED' }] },
+    disk: { deleted: [{ path: 'a' }], skipped: [{ path: 'b' }], failed: [], reclaimedBytes: 2048 },
+  })
+  eq(okText.includes(t('imgDoneOffload', { n: 3 })), true, '成功文案带摘除张数')
+  eq(okText.includes(t('imgSkippedItems', { n: 1 })), true, '成功文案带被跳过项数')
+  eq(okText.includes(t('imgDoneDisk', { n: 1, size: fmtBytes(2048) })), true, '成功文案带删盘结果')
+
+  const nothing = offloadOutcome({
+    ok: false,
+    error: 'NOTHING_TO_OFFLOAD',
+    skippedItems: [{ seq: 1, imageIndex: 0, reason: 'ALREADY_OFFLOADED' }],
+  })
+  eq(nothing.includes(t('imgWhyOffloaded')), true, '「没有可摘除项」要说明原因，而不是只说失败')
+
+  const offscreen = offloadOutcome({ ok: false, error: 'NOTHING_TO_OFFLOAD', skippedItems: [{ reason: 'NOT_ON_SURFACE' }] })
+  eq(offscreen.includes(t('imgWhyOffscreen')), true, '已不在当前上下文 → 对应解释')
+
+  const failed = offloadOutcome({
+    ok: false,
+    error: 'APPEND_FAILED',
+    detail: 'image/offload: target seq 818 is not a current surface node',
+  })
+  eq(failed.includes('APPEND_FAILED'), true, '失败文案带错误码')
+  eq(failed.includes('not a current surface node'), true, '⚠️ 失败文案必须带出宿主原始文本（否则只有错误码，排查无从下手）')
+
+  const bare = offloadOutcome({ ok: false, error: 'SOMETHING' })
+  eq(bare, t('imgError', { msg: 'SOMETHING' }), '没有 detail 时退回只显示错误码')
+  eq(offloadOutcome(null), '', 'null 报告 → 空文案')
+}
 
 // ------------------------------------------------------------------- 收尾
 

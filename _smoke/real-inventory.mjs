@@ -38,6 +38,16 @@ console.log(`sessions 根   = ${sessions}  (${existsSync(sessions) ? '存在' : 
 console.log(`projcache 根  = ${projCache}  (${existsSync(projCache) ? '存在' : '不存在'})`)
 
 const items = scanInventory(home)
+
+// 类型分布 + 逐个会话一览（这一版重点修的就是「名字 / 类型识别」）
+const roots = items.filter((i) => i.meta?.isSubagent !== true)
+const subs = items.filter((i) => i.meta?.isSubagent === true)
+console.log('类型分布：根会话 ' + roots.length + ' 个，子 agent ' + subs.length + ' 个')
+for (const item of items) {
+  const kind = item.meta?.isSubagent === true ? '子 agent' : '根会话  '
+  const title = String(item.meta?.title ?? '(无标题)').replace(/\s+/g, ' ').slice(0, 30)
+  console.log('  ' + kind + '  ' + item.id.padEnd(46) + '  ' + title)
+}
 console.log(`\n发现会话 ${items.length} 个，合计 ${(items.reduce((n, i) => n + i.bytes, 0) / 1048576).toFixed(1)} MiB\n`)
 
 // 按工作区聚合

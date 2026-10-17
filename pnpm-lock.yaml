@@ -1,0 +1,49 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: '*'
+        version: 3.18.4
+      dsh-delete:
+        specifier: github:ycm50/dsh-delete
+        version: https://codeload.github.com/ycm50/dsh-delete/tar.gz/647cbff71beedbc572afe7dc932db01cdace3a1e(@deepseek-ai/schemastery@3.18.4)
+
+packages:
+
+  '@deepseek-ai/cosmokit@1.8.5':
+    resolution: {integrity: sha512-LXsrlem9z8dq4sLflj2yuCuYX7KqhdzF5hZly3eZyuTo8d6oDSOXuEgC5DbQWKW+lksm6zmOutQLsP/ma6wR6A==}
+
+  '@deepseek-ai/schemastery@3.18.4':
+    resolution: {integrity: sha512-SSXO6tYuyrIqKVbmOnIq0s+riUywYzouFMcnBluHF9n4KMo2G8HvEzhCYj6pj2617/glOjbJuVInJ9hfONsjkg==}
+
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  dsh-delete@https://codeload.github.com/ycm50/dsh-delete/tar.gz/647cbff71beedbc572afe7dc932db01cdace3a1e:
+    resolution: {gitHosted: true, integrity: sha512-WyqZ1umfLHHzil412quVd3+ZNCqFEoJiFtqJWulLw7fMezyi2w8WO6zeMdZ97GjFZ1BmUASPoh/dpvtOlGs63g==, tarball: https://codeload.github.com/ycm50/dsh-delete/tar.gz/647cbff71beedbc572afe7dc932db01cdace3a1e}
+    version: 0.2.0
+    engines: {dsh: '>=0.2.0-rc.1'}
+    peerDependencies:
+      '@deepseek-ai/schemastery': '*'
+
+snapshots:
+
+  '@deepseek-ai/cosmokit@1.8.5': {}
+
+  '@deepseek-ai/schemastery@3.18.4':
+    dependencies:
+      '@deepseek-ai/cosmokit': 1.8.5
+      '@standard-schema/spec': 1.1.0
+
+  '@standard-schema/spec@1.1.0': {}
+
+  dsh-delete@https://codeload.github.com/ycm50/dsh-delete/tar.gz/647cbff71beedbc572afe7dc932db01cdace3a1e(@deepseek-ai/schemastery@3.18.4):
+    dependencies:
+      '@deepseek-ai/schemastery': 3.18.4

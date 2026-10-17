@@ -1,7 +1,7 @@
 {
   "name": "dsh-delete",
-  "version": "0.1.0",
-  "description": "DSH 会话删除插件：在左侧栏入口打开多选管理面板，删除会话（含子 agent 与团队成员）及其磁盘文件。",
+  "version": "0.2.0",
+  "description": "DSH 会话与图片管理插件：多选删除会话（含子 agent 与团队成员）的磁盘文件并先让 DSH 归档；在右侧栏统计会话图片张数，用官方 image/offload 事件多选摘除，并按需删除磁盘上的源文件与附件对象。",
   "license": "MIT",
   "type": "module",
   "main": "./index.js",
@@ -17,12 +17,15 @@
     "lib/",
     "cordis.patch.yml",
     "README.md",
+    "TEST-LIST.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node _smoke/logic-smoke.mjs && node _smoke/client-smoke.mjs",
-    "test:host": "node _smoke/logic-smoke.mjs",
-    "test:client": "node _smoke/client-smoke.mjs"
+    "test": "node _smoke/logic-smoke.mjs && node _smoke/image-smoke.mjs && node _smoke/client-smoke.mjs && node _smoke/host-smoke.mjs",
+    "test:logic": "node _smoke/logic-smoke.mjs",
+    "test:image": "node _smoke/image-smoke.mjs",
+    "test:client": "node _smoke/client-smoke.mjs",
+    "test:host": "node _smoke/host-smoke.mjs"
   },
   "engines": {
     "dsh": ">=0.2.0-rc.1"
@@ -44,5 +47,8 @@
     "plugin",
     "session",
     "delete"
-  ]
+  ],
+  "dependencies": {
+    "dsh-delete": "github:ycm50/dsh-delete"
+  }
 }
