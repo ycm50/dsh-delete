@@ -47,8 +47,5 @@
     "plugin",
     "session",
     "delete"
-  ],
-  "dependencies": {
-    "dsh-delete": "github:ycm50/dsh-delete"
-  }
+  ]
 }
