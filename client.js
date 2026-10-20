@@ -873,7 +873,7 @@ window.__ModuleLoader__.load({
           row.updatedAt = Number(meta.lastPromptAt) || Number(meta.createdAt) || 0
         }
         row.blank = row.blank || meta.blank === true
-        if (meta.isSubagent === true || row.parentId !== '') row.isSubagent = true
+        if (meta.isSubagent === true) row.isSubagent = true
         if (row.subagentLabel === '' && typeof meta.subagentLabel === 'string') row.subagentLabel = meta.subagentLabel
       }
 
@@ -897,7 +897,6 @@ window.__ModuleLoader__.load({
       const rows = [...byKey.values()].filter((row) => !row.blank || row.bytes > 0)
       for (const row of rows) {
         row.diskOnly = !row.inSnapshot && row.bytes > 0
-        if (row.parentId !== '') row.isSubagent = true
         if (row.title === '') {
           const display = row.displayTitle
           if (display !== '' && display !== row.id) row.title = display
@@ -1173,7 +1172,7 @@ window.__ModuleLoader__.load({
       const hasKids = kids.length > 0
       const meta = []
       if (row.running) meta.push(h('span', { className: 'dshdel-badge run', key: 'run' }, t('badgeRunning')))
-      if (row.isSubagent || row.parentId !== '') {
+      if (row.isSubagent) {
         meta.push(
           h(
             'span',
@@ -1547,9 +1546,9 @@ window.__ModuleLoader__.load({
       return [...add].filter((id) => tree.byId.has(id))
     }
 
-    /** 纯函数：所有「子 agent」行（有父 id，或磁盘元数据标了 isSubagent）。 */
+    /** 纯函数：所有「子 agent」行（只有真正的子 agent，分支不算）。 */
     function subagentIds(rows) {
-      return rows.filter((r) => r.isSubagent === true || r.parentId !== '').map((r) => r.id)
+      return rows.filter((r) => r.isSubagent === true).map((r) => r.id)
     }
 
     /** 批量选择：把当前勾选扩展为「含子 agent / 含团队成员 / 含整族」。 */

@@ -63,6 +63,7 @@ const CAN_ZSTD = typeof zstdCompressSync === 'function'
 
 const ROOT = '11111111-1111-4111-8111-111111111111' // 目录 session-<ROOT>（现版根会话）
 const SUB = '22222222-2222-4222-8222-222222222222' // 目录 <SUB>（现版子 agent：裸 uuid）
+const BRANCH = '88888888-8888-4888-8888-888888888888' // 分支（fork）：有 parentSession，不是子 agent
 const LEGACY = '33333333-3333-4333-8333-333333333333' // 老版单文件 session-<LEGACY>.jsonl.zstd
 const GHOST = '44444444-4444-4444-8444-444444444444' // 只有投影缓存
 const BROKEN = '55555555-5555-4555-8555-555555555555' // 坏投影缓存（占着磁盘，仍要能删）
@@ -143,6 +144,12 @@ const rootProj = writeProjectionFile('session-' + ROOT + '.json', {
 const subDir = writeSessionDir(SUB, headerOf(SUB, { origin: 'subagent', parentSession: 'session-' + ROOT, delegationDepth: 1 }), [
   [{ type: 'user/message', seq: 1, data: { source: { kind: 'user' } } }],
   [titleEvent('# 任务：把子任务做完', 2)],
+])
+
+// 分支（fork）：同样带 parentSession，但 origin 不是 subagent、delegationDepth=0，
+// 绝不能被当成子 agent（回归：旧逻辑见 parentSession 就标子 agent）。
+const branchDir = writeSessionDir('session-' + BRANCH, headerOf('session-' + BRANCH, { parentSession: 'session-' + ROOT, delegationDepth: 0 }), [
+  [titleEvent('分支会话', 2)],
 ])
 
 // 老版单文件布局（主体不在目录里，而是 workspace 目录下的一个文件）
@@ -232,6 +239,11 @@ if (CAN_ZSTD) {
   eq(rootHeader?.id, 'session-' + ROOT, '根会话 header id 带前缀')
   eq(rootHeader?.isSubagent, undefined, '根会话不是子 agent')
 
+  const branchHeader = readSessionHeader(join(branchDir, 'session.v4.jsonl.zstd'))
+  eq(branchHeader?.isSubagent, undefined, '分支（fork）不是子 agent（即使有 parentSession）')
+  eq(branchHeader?.parentId, 'session-' + ROOT, '分支的父 id 仍保留')
+  eq(branchHeader?.delegationDepth, 0, '分支的 delegationDepth 保持 0')
+
   eq(readSessionHeader(join(wsDir, PLAIN + '.jsonl'))?.id, PLAIN, '明文日志也能读 header')
 
   eq(readDurableTitle(join(subDir, 'session.v4.jsonl.zstd')), '# 任务：把子任务做完', '标题来自日志的 session/title 事件')
@@ -289,6 +301,9 @@ if (CAN_ZSTD) {
   eq(byId.get(SUB)?.meta?.parentId, 'session-' + ROOT, '盘点里父 id 来自 header')
   eq(byId.get(SUB)?.meta?.title, '# 任务：把子任务做完', '盘点里子 agent 的标题来自日志（旧版会退化成 cwd 目录名）')
   eq(byId.get('session-' + ROOT)?.meta?.isSubagent, undefined, '盘点里根会话不是子 agent（旧版被空投影误判）')
+  eq(byId.get('session-' + BRANCH)?.meta?.isSubagent, undefined, '盘点里分支（fork）不是子 agent')
+  eq(byId.get('session-' + BRANCH)?.meta?.parentId, 'session-' + ROOT, '盘点里分支的父 id 保留')
+  eq(byId.get('session-' + BRANCH)?.meta?.title, '分支会话', '分支标题来自日志')
   eq(byId.get('session-' + LEGACY)?.meta?.title, '老版单文件会话', '老版单文件的标题也能读到')
 }
 

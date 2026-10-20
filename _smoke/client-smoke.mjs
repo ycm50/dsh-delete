@@ -264,6 +264,7 @@ eq(t('remove'), '删除选中', '无参数词条')
 const H = '11111111-0000-4000-8000-00000000000b' // 根：磁盘写 session-<H>，快照写 <H>
 const I = '22222222-0000-4000-8000-00000000000c' // 子 agent：磁盘写 <I>，父 id 写 session-<H>
 const J = '33333333-0000-4000-8000-00000000000d' // 只在快照里（宿主内存里的会话）
+const K = '44444444-0000-4000-8000-00000000000e' // 分支（fork）：有 parentId，但不是子 agent
 
 const inventory2 = {
   items: [
@@ -295,14 +296,16 @@ const snapshot2 = {
   [H]: { id: H, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: '', origin: '', running: false, blank: false, updatedAt: 9000 },
   [I]: { id: I, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: 'session-' + H, origin: 'subagent', running: true, blank: false, updatedAt: 8000 },
   [J]: { id: J, title: '', displayTitle: 'Downloads', cwd: 'C:\\w', parentId: '', origin: '', running: false, blank: false, updatedAt: 7000 },
+  [K]: { id: K, title: '分支会话', displayTitle: '分支会话', cwd: 'C:\\w', parentId: 'session-' + H, origin: 'branch', running: false, blank: false, updatedAt: 7500 },
 }
 
 const rows2 = buildRows(inventory2, snapshot2)
-eq(rows2.length, 3, '两种 id 写法必须合并成 3 行（旧版会多出一行"仅磁盘"）')
+eq(rows2.length, 4, '两种 id 写法必须合并成 4 行（含分支行）')
 const byKey2 = new Map(rows2.map((r) => [identityKey(r.id), r]))
 const rowH = byKey2.get(H)
 const rowI = byKey2.get(I)
 const rowJ = byKey2.get(J)
+const rowK = byKey2.get(K)
 ok(rowH !== undefined, '磁盘上带前缀的会话应出现在合并结果里')
 ok(rowI !== undefined, '磁盘上裸 uuid 的子 agent 应出现在合并结果里')
 eq(rowH.id, H, '行的 id 优先取快照里的那个（宿主认识的写法）')
@@ -314,12 +317,14 @@ eq(rowI.running, true, '子 agent 的运行状态来自快照')
 eq(rowI.parentId, 'session-' + H, '父 id 保留宿主写法')
 eq(rowJ.title, 'Downloads', '只有快照的会话退回 DSH 的 displayTitle')
 eq(rowH.paths, 1, '合并后路径数来自磁盘盘点')
+eq(rowK.isSubagent, false, '分支（fork）有 parentId 但不是子 agent')
+eq(rowK.parentId, 'session-' + H, '分支的父 id 仍保留（用于树形展示）')
 
 const tree2 = buildTree(rows2)
 eq(tree2.roots.length, 2, '父 id 与子行 id 写法不同也要能挂上（H / J 是根）')
-eq(tree2.childrenOf.get(H), [I], '子 agent 挂在父行下（跨前缀写法）')
-eq(descendantsOf(tree2, H), [I], '后代计算跨前缀写法')
-eq(subagentIds(rows2).sort(), [I], '「全选子 agent」只挑真正的子 agent 行')
+eq(tree2.childrenOf.get(H), [I, K], '子 agent 和分支都挂在父行下（跨前缀写法）')
+eq(descendantsOf(tree2, H).sort(), [I, K].sort(), '后代计算跨前缀写法，含分支')
+eq(subagentIds(rows2).sort(), [I], '「全选子 agent」只挑真正的子 agent，不含分支')
 
 // 纯函数：id 归一与路径末段
 eq(identityKey('session-' + H), H, 'identityKey 剥掉 session- 前缀')
@@ -696,3 +701,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 console.log('全部通过 ✅')
+
